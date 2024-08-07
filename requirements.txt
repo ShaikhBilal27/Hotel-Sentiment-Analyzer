@@ -3,4 +3,5 @@ pandas
 Django
 numpy
 groq
+nltk
 gunicorn
