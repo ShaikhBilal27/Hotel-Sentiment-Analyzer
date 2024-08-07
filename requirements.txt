@@ -3,5 +3,6 @@ pandas
 Django
 numpy
 groq
+scikit-learn
 nltk
 gunicorn
