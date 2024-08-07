@@ -1,0 +1,6 @@
+flask
+pandas
+Django
+numpy
+groq
+gunicorn

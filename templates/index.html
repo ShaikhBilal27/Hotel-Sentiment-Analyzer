@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gourmet Guide</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-top: 50px;
+        }
+        h1 {
+            color: #4a4a4a;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .card {
+            border: none;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+        .card-header {
+            background-color: #007bff;
+            color: white;
+            font-weight: bold;
+        }
+        .btn-primary {
+            background-color: #28a745;
+            border-color: #28a745;
+        }
+        .btn-primary:hover {
+            background-color: #218838;
+            border-color: #1e7e34;
+        }
+        #chat-history {
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mt-5 mb-4">Gourmet Guide</h1>
+
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <div class="card">
+                    <div class="card-header">
+                        Select a Hotel
+                    </div>
+                    <div class="card-body">
+                        <select id="hotel-select" class="form-select">
+                            <option value="">Choose a hotel...</option>
+                            {% for hotel in hotels %}
+                                <option value="{{ hotel }}">{{ hotel }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6 mb-3">
+                <div class="card">
+                    <div class="card-header">
+                        Menu
+                    </div>
+                    <div class="card-body">
+                        <select id="dish-select" class="form-select">
+                            <option value="">Choose a dish...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="dish-analysis" class="card mt-4" style="display: none;">
+            <div class="card-header">
+                Dish Analysis
+            </div>
+            <div class="card-body">
+                <h3 id="dish-name"></h3>
+                <p>Score: <span id="dish-score"></span></p>
+                <div style="max-width: 300px; max-height: 300px; margin: 0 auto;">
+                    <canvas id="sentiment-chart"></canvas>
+                </div>
+                <h4 class="mt-3">Sample Reviews:</h4>
+                <p><strong>Positive:</strong> <span id="positive-review"></span></p>
+                <p><strong>Negative:</strong> <span id="negative-review"></span></p>
+                <p><strong>Neutral:</strong> <span id="neutral-review"></span></p>
+            </div>
+        </div>
+
+        <div class="text-center mt-3 mb-4">
+            <button id="recommend-btn" class="btn btn-primary">Recommend Top 3 Dishes</button>
+        </div>
+
+        <div id="recommendations" class="row"></div>
+
+        <div class="card mt-4">
+            <div class="card-header">
+                AI Chat Assistant
+            </div>
+            <div class="card-body">
+                <div id="chat-history" class="mb-3" style="height: 300px; overflow-y: auto;"></div>
+                <div class="input-group">
+                    <input type="text" id="user-input" class="form-control" placeholder="Type your message here...">
+                    <div class="input-group-append">
+                        <button class="btn btn-primary" type="button" onclick="sendMessage()">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            let sentimentChart;
+
+            $('#hotel-select').change(function() {
+                let hotel = $(this).val();
+                if (hotel) {
+                    $.post('/get_menu', {hotel: hotel}, function(data) {
+                        $('#dish-select').html('<option value="">Choose a dish...</option>');
+                        data.forEach(function(dish) {
+                            $('#dish-select').append(`<option value="${dish}">${dish}</option>`);
+                        });
+                    });
+                }
+            });
+
+            $('#dish-select').change(function() {
+                let hotel = $('#hotel-select').val();
+                let dish = $(this).val();
+                if (hotel && dish) {
+                    $.post('/analyze_dish', {hotel: hotel, dish: dish}, function(data) {
+                        $('#dish-name').text(dish);
+                        $('#dish-score').text(data.score.toFixed(2));
+                        $('#positive-review').text(data.positive);
+                        $('#negative-review').text(data.negative);
+                        $('#neutral-review').text(data.neutral);
+                        $('#dish-analysis').show();
+
+                        if (sentimentChart) {
+                            sentimentChart.destroy();
+                        }
+
+                        let ctx = document.getElementById('sentiment-chart').getContext('2d');
+                        sentimentChart = new Chart(ctx, {
+                            type: 'doughnut',
+                            data: {
+                                labels: ['Positive', 'Negative', 'Neutral'],
+                                datasets: [{
+                                    data: [data.positive_percent, data.negative_percent, data.neutral_percent],
+                                    backgroundColor: ['#28a745', '#dc3545', '#ffc107']
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                legend: {
+                                    position: 'bottom'
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Sentiment Analysis'
+                                }
+                            }
+                        });
+                    });
+                }
+            });
+
+            $('#recommend-btn').click(function() {
+                let hotel = $('#hotel-select').val();
+                if (hotel) {
+                    $.post('/recommend_food', {hotel: hotel}, function(data) {
+                        $('#recommendations').empty();
+                        data.forEach(function(dish, index) {
+                            $('#recommendations').append(`
+                                <div class="col-md-4 mb-3">
+                                    <div class="card">
+                                        <div class="card-body">
+                                            <h5 class="card-title">${index + 1}. ${dish.dish}</h5>
+                                            <p class="card-text">Score: ${dish.score.toFixed(2)}</p>
+                                            <p class="card-text">Positive: ${dish.positive_percent.toFixed(2)}%</p>
+                                            <p class="card-text">Negative: ${dish.negative_percent.toFixed(2)}%</p>
+                                            <p class="card-text">Neutral: ${dish.neutral_percent.toFixed(2)}%</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            `);
+                        });
+                    });
+                } else {
+                    alert('Please select a hotel first.');
+                }
+            });
+        });
+
+        function sendMessage() {
+            var userInput = document.getElementById('user-input').value;
+            if (userInput.trim() === '') return;
+
+            // Display user message
+            addMessageToChat('You: ' + userInput);
+
+            // Clear input field
+            document.getElementById('user-input').value = '';
+
+            // Send request to server
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'user_input=' + encodeURIComponent(userInput)
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Display AI response
+                addMessageToChat('AI: ' + data.response);
+            })
+            .catch((error) => {
+                console.error('Error:', error);
+                addMessageToChat('AI: Sorry, there was an error processing your request.');
+            });
+        }
+
+        function addMessageToChat(message) {
+            var chatHistory = document.getElementById('chat-history');
+            var messageElement = document.createElement('p');
+            messageElement.textContent = message;
+            chatHistory.appendChild(messageElement);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        // Allow sending message with Enter key
+        document.getElementById('user-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
