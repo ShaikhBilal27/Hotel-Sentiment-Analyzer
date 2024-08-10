@@ -34,14 +34,6 @@ regressor = LinearRegression()
 def get_sentiment_analysis(review):
     return sia.polarity_scores(review)
 
-def calculate_sentiment_percentages(sentiments):
-    total = len(sentiments)
-    sentiment_counts = Counter(sentiments)
-    positive_percent = (sentiment_counts['positive'] / total) * 100
-    negative_percent = (sentiment_counts['negative'] / total) * 100
-    neutral_percent = (sentiment_counts['neutral'] / total) * 100
-    return positive_percent, negative_percent, neutral_percent
-
 def read_csv_file(filename):
     data = {}
     with open(filename, 'r', encoding='utf-8') as file:
@@ -62,9 +54,27 @@ def preprocess_text(text):
     tokens = [lemmatizer.lemmatize(token) for token in tokens if token not in stop_words]
     return ' '.join(tokens)
 
-def simple_summarize(text, num_sentences=2):
-    sentences = text.split('.')
-    return '. '.join(sentences[:num_sentences]) + '.'
+def extract_attributes(reviews):
+    positive_attributes = Counter()
+    negative_attributes = Counter()
+    for review in reviews:
+        sentiment = get_sentiment_analysis(review)
+        words = preprocess_text(review).split()
+        for word in words:
+            if sentiment['compound'] > 0.05:
+                positive_attributes[word] += 1
+            elif sentiment['compound'] < -0.05:
+                negative_attributes[word] += 1
+    return positive_attributes, negative_attributes
+
+def generate_customer_summary(reviews):
+    positive_attrs, negative_attrs = extract_attributes(reviews)
+    summary = "Customers like the "
+    summary += ", ".join(attr for attr, count in positive_attrs.most_common(5))
+    summary += ". However, some customers mentioned issues with "
+    summary += ", ".join(attr for attr, count in negative_attrs.most_common(3))
+    summary += "."
+    return summary
 
 # Load data
 hotel_data = read_csv_file('hotels_review.csv')
@@ -101,32 +111,28 @@ def analyze_dish():
     dish = request.form['dish']
     reviews = hotel_data[hotel][dish]
     
-    sentiments = [get_sentiment_analysis(review)['compound'] for review in reviews]
-    positive = [review for review, sentiment in zip(reviews, sentiments) if sentiment > 0.05]
-    negative = [review for review, sentiment in zip(reviews, sentiments) if sentiment < -0.05]
-    neutral = [review for review, sentiment in zip(reviews, sentiments) if -0.05 <= sentiment <= 0.05]
+    total_reviews = len(reviews)
     
-    positive_percent, negative_percent, neutral_percent = calculate_sentiment_percentages(['positive' if s > 0.05 else 'negative' if s < -0.05 else 'neutral' for s in sentiments])
-    
-    # Use ML models for additional insights
+    # Use ML models for predictions
     vectorized_reviews = vectorizer.transform(reviews)
     predicted_sentiments = classifier.predict(vectorized_reviews)
     predicted_ratings = regressor.predict(vectorized_reviews)
     
-    # Generate simple summary
-    summary = simple_summarize(' '.join(reviews))
+    average_rating = np.mean(predicted_ratings)
+    
+    positive_attributes, negative_attributes = extract_attributes(reviews)
+    
+    customer_summary = generate_customer_summary(reviews)
+    
+    attributes_to_learn = ['Quality', 'Ease of use', 'Appearance', 'Value', 'Light', 'Safety']
     
     return jsonify({
-        'positive': random.choice(positive) if positive else "No positive review",
-        'negative': random.choice(negative) if negative else "No negative review",
-        'neutral': random.choice(neutral) if neutral else "No neutral review",
-        'score': sum(sentiments) / len(sentiments),
-        'positive_percent': positive_percent,
-        'negative_percent': negative_percent,
-        'neutral_percent': neutral_percent,
-        'predicted_sentiment': np.mean(predicted_sentiments),
-        'predicted_rating': np.mean(predicted_ratings),
-        'summary': summary
+        'total_reviews': total_reviews,
+        'average_rating': average_rating,
+        'customer_summary': customer_summary,
+        'positive_attributes': dict(positive_attributes.most_common(5)),
+        'negative_attributes': dict(negative_attributes.most_common(5)),
+        'attributes_to_learn': attributes_to_learn
     })
 
 @app.route('/recommend_food', methods=['POST'])
@@ -136,26 +142,21 @@ def recommend_food():
     recommendations = []
 
     for dish, reviews in menu.items():
-        sentiments = [get_sentiment_analysis(review)['compound'] for review in reviews]
-        score = sum(sentiments) / len(sentiments)
-        positive_percent, negative_percent, neutral_percent = calculate_sentiment_percentages(['positive' if s > 0.05 else 'negative' if s < -0.05 else 'neutral' for s in sentiments])
-        
-        # Use ML models for predictions
         vectorized_reviews = vectorizer.transform(reviews)
-        predicted_sentiments = classifier.predict(vectorized_reviews)
         predicted_ratings = regressor.predict(vectorized_reviews)
+        average_rating = np.mean(predicted_ratings)
+        
+        positive_attributes, negative_attributes = extract_attributes(reviews)
         
         recommendations.append({
             'dish': dish,
-            'score': score,
-            'positive_percent': positive_percent,
-            'negative_percent': negative_percent,
-            'neutral_percent': neutral_percent,
-            'predicted_sentiment': np.mean(predicted_sentiments),
-            'predicted_rating': np.mean(predicted_ratings)
+            'average_rating': average_rating,
+            'total_reviews': len(reviews),
+            'top_positive': dict(positive_attributes.most_common(3)),
+            'top_negative': dict(negative_attributes.most_common(3))
         })
 
-    recommendations.sort(key=lambda x: x['predicted_rating'], reverse=True)
+    recommendations.sort(key=lambda x: x['average_rating'], reverse=True)
     return jsonify(recommendations[:3])
 
 @app.route('/chat', methods=['POST'])
@@ -173,8 +174,8 @@ def chat():
                 best_hotel, best_reviews = max(((hotel, reviews) for hotel, menu in hotel_data.items() for d, reviews in menu.items() if d.lower() == dish.lower()), key=lambda x: np.mean(regressor.predict(vectorizer.transform(x[1]))))
                 best_score = np.mean(regressor.predict(vectorizer.transform(best_reviews)))
                 response = f"The best {dish} can be found at {best_hotel} with a predicted rating of {best_score:.2f}/5. "
-                summary = simple_summarize(' '.join(best_reviews))
-                response += f"Here's a summary of the reviews: {summary}"
+                customer_summary = generate_customer_summary(best_reviews)
+                response += f"Here's what customers say: {customer_summary}"
                 return jsonify({'response': response})
         return jsonify({'response': "I couldn't identify a specific dish in your question. Could you please specify which dish you're looking for?"})
     
@@ -184,26 +185,26 @@ def chat():
                 recommendations = recommend_food()
                 response = f"Here are the top 3 recommended dishes at {hotel}:\n"
                 for rec in recommendations[:3]:
-                    response += f"- {rec['dish']} (Predicted rating: {rec['predicted_rating']:.2f}/5)\n"
+                    response += f"- {rec['dish']} (Avg. rating: {rec['average_rating']:.2f}/5, {rec['total_reviews']} reviews)\n"
+                    response += f"  Top positives: {', '.join(rec['top_positive'].keys())}\n"
+                    response += f"  Top negatives: {', '.join(rec['top_negative'].keys())}\n"
                 return jsonify({'response': response})
         return jsonify({'response': "I'd be happy to recommend some dishes! Please specify a hotel, and I'll provide you with our top recommendations based on customer reviews."})
     
-    elif 'review' in processed_input or 'sentiment' in processed_input or 'score' in processed_input:
+    elif 'review' in processed_input or 'rating' in processed_input:
         for hotel in hotel_data.keys():
             if hotel.lower() in processed_input:
                 for dish in hotel_data[hotel].keys():
                     if dish.lower() in processed_input:
                         analysis = analyze_dish()
                         response = f"Analysis for {dish} at {hotel}:\n"
-                        response += f"Overall sentiment score: {analysis['score']:.2f}\n"
-                        response += f"Predicted rating: {analysis['predicted_rating']:.2f}/5\n"
-                        response += f"Positive: {analysis['positive_percent']:.1f}%, Negative: {analysis['negative_percent']:.1f}%, Neutral: {analysis['neutral_percent']:.1f}%\n"
-                        response += f"Summary: {analysis['summary']}\n"
-                        response += f"Sample positive review: {analysis['positive']}\n"
-                        response += f"Sample negative review: {analysis['negative']}"
+                        response += f"Average rating: {analysis['average_rating']:.2f}/5 ({analysis['total_reviews']} reviews)\n"
+                        response += f"Customer summary: {analysis['customer_summary']}\n"
+                        response += "Top positive attributes: " + ", ".join(analysis['positive_attributes'].keys()) + "\n"
+                        response += "Top negative attributes: " + ", ".join(analysis['negative_attributes'].keys())
                         return jsonify({'response': response})
                 return jsonify({'response': f"I can provide analysis for dishes at {hotel}. Which specific dish would you like to know about?"})
-        return jsonify({'response': "I can provide detailed analysis of reviews and sentiment scores for specific dishes or hotels. Which one would you like to know about?"})
+        return jsonify({'response': "I can provide detailed analysis of reviews and ratings for specific dishes or hotels. Which one would you like to know about?"})
     
     elif 'thank' in processed_input:
         return jsonify({'response': "You're welcome! Enjoy your meal and don't hesitate to ask if you need anything else."})
